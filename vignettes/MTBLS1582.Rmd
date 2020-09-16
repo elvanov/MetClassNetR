@@ -9,18 +9,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+## System preparation
 
-## To Do
-* remove absolute path variables
-* atm they are copied to ../data/MTBLS1582/raw/ and addressed from there
-but not pushed into github
-
-* Transformations to file and check with Gerd and Micha
 ```{r load libs, message=FALSE}
 ## Data Import
 library(MSnbase)
 library(metabolighteR)
 library(MsBackendMsp)
+library(QFeatures) 
+
 
 ## Homologous Series
 library(nontarget)
@@ -69,54 +66,37 @@ file_information_tibble %>% dplyr::filter(grepl(pattern = "tsv",x = file))
 
 ### Extract MS1
 
-```{r read_MS1}
-## Extract objects from mzTab-M
+```{r MS1 mzTab2Qfeature}
+## Extract metadata object from mzTab-M
 mt <- unlist(metadata(mtbls1582mztab))
-sm <- smallMolecules(mtbls1582mztab)
-mf <- moleculeFeatures(mtbls1582mztab)
-
 ## Extract assay and file names
 assaynames <- mt[grep("^assay\\[[0-9]*\\]$", names(mt))]
 filenames <- mt[grep("^ms_run\\[[0-9]*\\]-location$", names(mt))]
 
+
+## Extract molecule Features object from mzTab-M
+mf <- moleculeFeatures(mtbls1582mztab)
 ## Extract feature definitions
 featid <- mf$SMF_ID
 rt <- mf$retention_time_in_seconds
 mz <- mf$exp_mass_to_charge
 
+
+## Extract small molecule object from mzTab-M
+sm <- smallMolecules(mtbls1582mztab)
 ## Extract some chemistry
 smiles <- sm$smiles
 inchi <- sm$inchi
 
-## Extract data matrix
-## and replace actual assay names
-
-ecols <- grep("abundance_assay", names(mf))
-e <- as.matrix(mf[, ecols])
-colnames(e) <- assaynames[sub("abundance_", "", colnames(e))]
-```
-
-```{r mzTab2Qfeature}
-library(MSnbase) 
-library(QFeatures) 
-
-fl <- "/vol/bioinvindex/Submissions/MTBLS1582/MTBLS1582/Height_NRGneg_2020471011.mzTab"
-mtbls1582mztab <- MzTab(fl)
-
-## Extract objects from mzTab-M
-mt <- unlist(metadata(mtbls1582mztab))
-mf <- moleculeFeatures(mtbls1582mztab)
-
-## Extract assay names
-assaynames <- mt[grep("^assay\\[[0-9]*\\]$", names(mt))]
 
 ## Extract data matrix
 ## and replace actual assay names
-
 ecols <- grep("abundance_assay", names(mf))
-
 ## Fix assay names with information from Metadata MTD section
 colnames(mf)[ecols] <- assaynames[sub("abundance_", "", colnames(mf[, ecols]))]
+#e <- as.matrix(mf[, ecols])
+#colnames(e) <- assaynames[sub("abundance_", "", colnames(e))]
+
 
 ## Convert to QFeature
 data_qF <- readQFeatures(mf, ecol = ecols, fname = "SMF_ID", name = "pos")
@@ -128,7 +108,7 @@ data_qF <- readQFeatures(mf, ecol = ecols, fname = "SMF_ID", name = "pos")
 
 ## Extract MS2
 
-```{r read_MS2}
+```{r MS2}
 ## MS/MS parts
 be <- MsBackendMsp()
 
@@ -141,6 +121,8 @@ if (length(msms) != nrow(e)) {
 }
 
 ```
+
+
 ## Homologous Series 
 
 ```{r save3envihomolog}
@@ -226,6 +208,7 @@ saveNetwork(vn, "/tmp/vn.html")
 
 
 ## Mass difference network
+
 ```{r mass_difference}
 
 ## x must be a matrix mz RT intensities
