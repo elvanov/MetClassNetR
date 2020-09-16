@@ -9,14 +9,67 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Reading mzTab-M
+
+## To Do
+* remove absolute path variables
+* atm they are copied to ../data/MTBLS1582/raw/ and addressed from there
+but not pushed into github
+
+* Transformations to file and check with Gerd and Micha
+```{r load libs, message=FALSE}
+## Data Import
+library(MSnbase)
+library(metabolighteR)
+library(MsBackendMsp)
+
+## Homologous Series
+library(nontarget)
+
+## Graph Export
+library(tibble)
+library(dplyr)
+library(igraph)
+
+library(visNetwork) # for visNetwork() and friends
+library(networkD3)  # for saveNetwork()
+
+## Mass Difference Network
+#devtools::install_github("MetClassNet/MetNet", ref = "devel_Liesa")
+library(MetNet)
+library(ggplot2)
+
+```
+
+```{r file defs}
+source_folder <- "../data/MTBLS1582/raw/"  ## read only
+tmp_folder <- "../data/MTBLS1582/tmp/" ## read and write, deletable
+result_folder <- "../data/MTBLS1582/results/" ## read and write, deletable
+
+ms1_file <- paste0(source_folder,"Height_NRGneg_2020471011.mzTab")
+ms2_file <- paste0(source_folder,"20203121416_spectra_NRGneg.msp")
+```
+
+
+## Data Import from mzTab-M
+
+### Read data from file
+
+```{r read_file}
+mtbls1582mztab <- MzTab(ms1_file)
+```
+
+### Fetch data from a public metabolights study
+
+```{r read_metabolights, eval=FALSE}
+file_information_tibble <- get_study_files('MTBLS291', raw_data = TRUE)
+file_information_tibble %>% dplyr::filter(grepl(pattern = "tsv",x = file))
+## fetch file ?
+
+```
+
+### Extract MS1
 
 ```{r read_MS1}
-library(MSnbase)
-
-fl <- "/vol/bioinvindex/Submissions/MTBLS1582/MTBLS1582/Height_NRGneg_2020471011.mzTab"
-mtbls1582mztab <- MzTab(fl)
-
 ## Extract objects from mzTab-M
 mt <- unlist(metadata(mtbls1582mztab))
 sm <- smallMolecules(mtbls1582mztab)
@@ -41,17 +94,46 @@ inchi <- sm$inchi
 ecols <- grep("abundance_assay", names(mf))
 e <- as.matrix(mf[, ecols])
 colnames(e) <- assaynames[sub("abundance_", "", colnames(e))]
+```
+
+```{r mzTab2Qfeature}
+library(MSnbase) 
+library(QFeatures) 
+
+fl <- "/vol/bioinvindex/Submissions/MTBLS1582/MTBLS1582/Height_NRGneg_2020471011.mzTab"
+mtbls1582mztab <- MzTab(fl)
+
+## Extract objects from mzTab-M
+mt <- unlist(metadata(mtbls1582mztab))
+mf <- moleculeFeatures(mtbls1582mztab)
+
+## Extract assay names
+assaynames <- mt[grep("^assay\\[[0-9]*\\]$", names(mt))]
+
+## Extract data matrix
+## and replace actual assay names
+
+ecols <- grep("abundance_assay", names(mf))
+
+## Fix assay names with information from Metadata MTD section
+colnames(mf)[ecols] <- assaynames[sub("abundance_", "", colnames(mf[, ecols]))]
+
+## Convert to QFeature
+data_qF <- readQFeatures(mf, ecol = ecols, fname = "SMF_ID", name = "pos")
+
+#head(assay(data_qF[["pos"]]))
+#head(rowData(data_qF[["pos"]]))
 
 ```
 
+## Extract MS2
+
 ```{r read_MS2}
 ## MS/MS parts
-library(MsBackendMsp)
 be <- MsBackendMsp()
 
 ## Import a single file.
-fl2 <- "/vol/bioinvindex/Submissions/MTBLS1582/MTBLS1582/20203121416_spectra_NRGneg.msp"
-msms <- backendInitialize(be, fl2)
+msms <- backendInitialize(be, ms2_file)
 
 ## Paranoid check
 if (length(msms) != nrow(e)) {
@@ -59,11 +141,12 @@ if (length(msms) != nrow(e)) {
 }
 
 ```
+## Homologous Series 
 
 ```{r save3envihomolog}
-
+## serves as input for the webtool
 write.csv(cbind("m/z"=mz, "dummy"=999, "RT"=rt)[1:111,],
-          file="MTBLS1582-envihomolog.csv",
+          file=paste0(tmp_folder,"MTBLS1582-envihomolog.csv"),
           row.names=FALSE)
 
 # 
@@ -74,8 +157,6 @@ write.csv(cbind("m/z"=mz, "dummy"=999, "RT"=rt)[1:111,],
 ```
 
 ```{r homSeries0}
-library(nontarget)
-
 # (0.2) list of adducts/isotopes - package enviPat ############
 data(adducts);
 data(isotopes);
@@ -102,8 +183,10 @@ plotadduct(adduct);
 
 ```{r nontarget-searchHomologueSeries}
 # (4.1) Screen for homologue series ##################
-homol <- homol.search(peaklist,
-                      isotopes,		elements=c("C","H","O"), use_C=TRUE,
+homol <- homol.search(peaklist = peaklist,
+                      isotopes = isotopes,		
+                      elements=c("C","H","O"), 
+                      use_C=TRUE,
                       minmz=5, 	maxmz=50,
                       minrt=5,  maxrt=60,
                       ppm=TRUE,
@@ -112,19 +195,15 @@ homol <- homol.search(peaklist,
                       mzfilter=FALSE,
                       spar=.45, 	R2=.98,
                       plotit=FALSE)
+
 # (4.2) Plot results #################################
 plothomol(homol,xlim=FALSE,ylim=FALSE,plotlegend=TRUE);
 
 ```
 
+## Export to GML graph
+
 ```{r graph_export}
-library(tibble)
-library(dplyr)
-library(igraph)
-
-library(visNetwork) # for visNetwork() and friends
-library(networkD3)  # for saveNetwork()
-
 nl <- as_tibble(peaklist)
 
 el <- as_tibble(homol[["Peaks in homologue series"]]) %>% 
@@ -143,6 +222,146 @@ vn <- visNetwork(nodes = data$nodes,
 vn
 saveNetwork(vn, "/tmp/vn.html")
 ```
+
+
+
+## Mass difference network
+```{r mass_difference}
+
+## x must be a matrix mz RT intensities
+metabolites <- data.frame(mz,rt,e)
+
+#### from here:
+### https://bioconductor.org/packages/release/bioc/vignettes/MetNet/inst/doc/MetNet.html
+transformations <- rbind(
+    c("Alanine", "C3H5NO", "71.0371137878"),
+    c("Arginine", "C6H12N4O", "156.1011110281"),
+    c("Asparagine", "C4H6N2O2", "114.0429274472"),
+    c("Guanosine 5-diphosphate (-H2O)", "C10H13N5O10P2", "425.0137646843"),
+    c("Guanosine 5-monophosphate (-H2O)", "C10H12N5O7P", "345.0474342759"),
+    c("Guanine (-H)", "C5H4N5O", "150.0415847765"),
+    c("Aspartic acid", "C4H5NO3", "115.0269430320"),
+    c("Guanosine (-H2O)", "C10H11N5O4", "265.0811038675"),
+    c("Cysteine", "C3H5NOS", "103.0091844778"),
+    c("Deoxythymidine 5'-diphosphate (-H2O)", "C10H14N2O10P2", "384.01236770"),
+    c("Cystine", "C6H10N2O3S2", "222.0132835777"),
+    c("Thymidine (-H2O)", "C10H12N2O4", "224.0797068840"),
+    c("Glutamic acid", "C5H7NO3", "129.0425930962"),
+    c("Thymine (-H)", "C5H5N2O2", "125.0351024151"),
+    c("Glutamine", "C5H8N2O2", "128.0585775114"),
+    c("Thymidine 5'-monophosphate (-H2O)", "C10H13N2O7P", "304.0460372924"),
+    c("Glycine", "C2H3NO", "57.0214637236"),
+    c("Uridine 5'-diphosphate (-H2O)", "C9H12N2O11P2", "385.9916322587"),
+    c("Histidine", "C6H7N3O", "137.0589118624"),
+    c("Uridine 5'-monophosphate (-H2O)", "C9H11N2O8P", "306.0253018503"),
+    c("Isoleucine", "C6H11NO", "113.0840639804"),
+    c("Uracil (-H)", "C4H3N2O2", "111.0194523509"),
+    c("Leucine", "C6H11NO", "113.0840639804"),
+    c("Uridine (-H2O)", "C9H10N2O5", "226.0589714419"),
+    c("Lysine", "C6H12N2O", "128.0949630177"),
+    c("Acetylation (-H)", "C2H3O2", "59.0133043405"),
+    c("Methionine", "C5H9NOS", "131.0404846062"),
+    c("Acetylation (-H2O)", "C2H2O",  "42.0105646863"),
+    c("Phenylalanine", "C9H9NO",  "147.0684139162"),
+    c("C2H2", "C2H2", "26.0156500642"),
+    c("Proline", "C5H7NO", "97.0527638520"),
+    c("Carboxylation", "CO2", "43.9898292442"),
+    c("Serine", "C3H5NO2", "87.0320284099"),
+    c("CHO2", "CHO2", "44.9976542763"),
+    c("Threonine",  "C4H7NO2",  "101.0476784741"),
+    c("Condensation/dehydration", "H2O", "18.0105646863"),
+    c("Tryptophan", "C11H10N2O",  "186.0793129535"),
+    c("Diphosphate", "H3O6P2", "160.9404858489"),
+    c("Tyrosine", "C9H9NO2", "163.0633285383"),
+    c("Ethyl addition (-H2O)", "C2H4", "28.0313001284"),
+    c("Valine", "C5H9NO",  "99.0684139162"),
+    c("Formic Acid (-H2O)", "CO", "27.9949146221"),
+    c("Acetotacetate (-H2O)",  "C4H4O2", "84.0211293726"),
+    c("Glyoxylate (-H2O)", "C2O2",  "55.9898292442"),
+    c("Acetone (-H)", "C3H5O", "57.0340397826"),
+    c("Hydrogenation/dehydrogenation", "H2", "2.0156500642"),
+    c("Adenylate (-H2O)", "C10H12N5O6P", "329.0525196538"),
+    c("Hydroxylation (-H)", "O", "15.9949146221"),
+    c("Biotinyl (-H)", "C10H15N2O3S", "243.0803380482"),
+    c("Inorganic phosphate", "P", "30.9737615100"),
+    c("Biotinyl (-H2O)", "C10H14N2O2S", "226.0775983940"),
+    c("Ketol group (-H2O)", "C2H2O", "42.0105646863"),
+    c("Carbamoyl P transfer (-H2PO4)", "CH2ON", "44.0136386915"),
+    c("Methanol (-H2O)", "CH2", "14.0156500642"),
+    c("Co-enzyme A (-H)", "C21H34N7O16P3S", "765.0995583014"),
+    c("Phosphate", "HPO3", "79.9663304084"),
+    c("Co-enzyme A (-H2O)", "C21H33N7O15P3S", "748.0968186472"),
+    c("Primary amine", "NH2", "16.0187240694"),
+    c("Glutathione (-H2O)", "C10H15N3O5S", "289.0732412976"),
+    c("Pyrophosphate", "PP", "61.9475230200"),
+    c("Isoprene addition (-H)", "C5H7", "67.0547752247"),
+    c("Secondary amine", "NH", "15.0108990373"),
+    c("Malonyl group (-H2O)", "C3H2O3", "86.0003939305"),
+    c("Sulfate (-H2O)", "SO3", "79.9568145563"),
+    c("Palmitoylation (-H2O)", "C16H30O", "238.2296655851"),
+    c("Tertiary amine", "N", "14.0030740052"),
+    c("Pyridoxal phosphate (-H2O)", "C8H8NO5P", "229.0140088825"),
+    c("C6H10O5", "C6H10O5", "162.0528234315"),
+    c("Urea addition (-H)", "CH3N2O", "59.0245377288"),
+    c("C6H10O6", "C6H10O6", "178.0477380536"),
+    c("Adenine (-H)", "C5H4N5", "134.0466701544"),
+    c("D-ribose (-H2O) (ribosylation)", "C5H8O4", "132.0422587452"),
+    c("Adenosine (-H2O)", "C10H11N5O3", "249.0861892454"),
+    c("Disaccharide (-H2O) #1", "C12H20O10", "324.105649"),
+    c("Disaccharide (-H2O) #2", "C12H20O11", "340.1005614851"),
+    c("Adenosine 5'-diphosphate (-H2O)", "C10H13N5O9P2", "409.0188500622"),
+    c("Glucose-N-phosphate (-H2O)", "C6H11O8P", "242.0191538399"),
+    c("Adenosine 5'-monophosphate (-H2O)", "C10H12N5O6P", "329.0525196538"),
+    c("Glucuronic acid (-H2O)", "C6H8O6", "176.0320879894"),
+    c("Cytidine 5'-diphosphate (-H2O)", "C9H13N3O10P2", "385.0076166739"),
+    c("Monosaccharide (-H2O)", "C6H10O5", "162.0528234315"),
+    c("Cytidine 5'-monophsophate (-H2O)", "C9H12N3O7P", "305.0412862655"),
+    c("Trisaccharide (-H2O)", "C18H30O15", "486.1584702945"),
+    c("Cytosine (-H)", "C4H4N3O",  "110.0354367661"))
+
+transformations <- data.frame(group = transformations[, 1], 
+            formula = transformations[, 2],
+            mass = as.numeric(transformations[, 3]))
+#####
+
+# Create mass difference network
+struct_adj <- MetNet::structural(x = metabolites, 
+                         transformation = transformations, 
+                         ppm = 10)
+
+# Create list of adjacency matrix
+struct_list <- MetNet::adjacency_list(x=struct_adj, from = "structural")
+
+# Summary of the list
+sumlist <- sum_mass(struct_list)
+
+# Plot the summary
+plot_list <- sumlist %>%
+# for big data: filter for counts higher 1000
+filter(Counts >= 1000) %>%
+top_n(10) %>%
+ggplot(aes(x=Type, y=Counts)) +
+geom_bar(stat = "identity") + 
+theme(axis.text=element_text(size=10)) + 
+coord_flip() #+ 
+#labs(title = "Numbers of determined mass differences", 
+#       subtitle = "positive ionization"       ) 
+
+plot(plot_list)
+
+```
+
+## Correlation network
+```{r correlation}
+# Create feature matrix only containing samples
+metabolites_int <- metabolites[, 3:dim(metabolites)[2]] %>% as.matrix()
+# Correlation network using pearson and spearman correlation
+# Positive, negative and p values are displayed
+stat_adj_l <- statistical(metabolites_int, model = c("pearson", "spearman"), p=TRUE)
+# Create list from correlation acjacency matrix 
+adj_stat <- adjacency_list(x = stat_adj_l, from = "statistical")
+```
+
 
 ```{r sessionInfo}
 sessionInfo()
